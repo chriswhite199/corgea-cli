@@ -1391,16 +1391,30 @@ pub fn query_scan_list(
     project: Option<&str>,
     page: Option<u16>,
     page_size: Option<u16>,
+    branch: Option<&str>,
 ) -> Result<ScansResponse, Box<dyn Error>> {
-    let page = page.unwrap_or(1);
+    request_scan_list(url, scan_list_params(project, page, page_size, branch))
+}
+
+/// Query params for the plain scan listing. `branch` is an exact match on the
+/// server side.
+fn scan_list_params(
+    project: Option<&str>,
+    page: Option<u16>,
+    page_size: Option<u16>,
+    branch: Option<&str>,
+) -> Vec<(&'static str, String)> {
     let mut query_params = vec![
-        ("page", page.to_string()),
+        ("page", page.unwrap_or(1).to_string()),
         ("page_size", page_size.unwrap_or(30).to_string()),
     ];
     if let Some(project) = project {
         query_params.push(("project", project.to_string()));
     }
-    request_scan_list(url, query_params)
+    if let Some(branch) = branch {
+        query_params.push(("branch", branch.to_string()));
+    }
+    query_params
 }
 
 /// One page of the project's scans that could be diffed against, newest first.
@@ -2641,6 +2655,15 @@ pub struct SCAIssuesResponse {
 mod tests {
     use super::*;
     use reqwest::header::{HeaderMap, HeaderValue};
+
+    #[test]
+    fn scan_list_params_include_branch_only_when_given() {
+        let with = scan_list_params(Some("p"), None, None, Some("feature/x"));
+        assert!(with.contains(&("branch", "feature/x".to_string())));
+        assert!(with.contains(&("project", "p".to_string())));
+        let without = scan_list_params(Some("p"), None, None, None);
+        assert!(!without.iter().any(|(k, _)| *k == "branch"));
+    }
 
     #[test]
     fn issue_json_omits_scanner_metadata_that_list_and_scan_reports_reemit() {

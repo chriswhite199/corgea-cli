@@ -403,3 +403,48 @@ fn list_issues_with_scan_id_skips_project_resolution() {
         "no /projects resolution for --issues --scan-id; hits: {hits:?}"
     );
 }
+
+#[test]
+fn list_branch_flag_is_sent_to_scans_and_encoded() {
+    let (url, hits) = spawn_stub(projects_match(), scans_one(CANON), issues_miss());
+    let (_tmp, repo) = temp_git_repo("dotnet-azure-web-tsb", REMOTE);
+    let out = run_list(&["--branch", "feature/x"], &url, &repo);
+    assert_eq!(out.status.code(), Some(0));
+    let hits = hits.lock().unwrap();
+    assert!(
+        hits.iter()
+            .any(|h| h.contains("/scans") && h.contains("branch=feature%2Fx")),
+        "hits: {hits:?}"
+    );
+}
+
+#[test]
+fn list_without_branch_flag_sends_no_branch_param() {
+    let (url, hits) = spawn_stub(projects_match(), scans_one(CANON), issues_miss());
+    let (_tmp, repo) = temp_git_repo("dotnet-azure-web-tsb", REMOTE);
+    let out = run_list(&[], &url, &repo);
+    assert_eq!(out.status.code(), Some(0));
+    let hits = hits.lock().unwrap();
+    assert!(
+        !hits.iter().any(|h| h.contains("branch=")),
+        "hits: {hits:?}"
+    );
+}
+
+#[test]
+fn list_branch_with_issues_is_rejected() {
+    let (url, _hits) = spawn_stub(projects_match(), scans_one(CANON), issues_one());
+    let (_tmp, repo) = temp_git_repo("dotnet-azure-web-tsb", REMOTE);
+    let out = run_list(&["--issues", "--branch", "main"], &url, &repo);
+    assert_eq!(out.status.code(), Some(1));
+}
+
+#[test]
+fn list_branch_with_no_matches_names_the_branch() {
+    let (url, _hits) = spawn_stub(projects_match(), scans_empty(), issues_miss());
+    let (_tmp, repo) = temp_git_repo("dotnet-azure-web-tsb", REMOTE);
+    let out = run_list(&["--branch", "nope"], &url, &repo);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(out.status.code(), Some(0));
+    assert!(stdout.contains("on branch 'nope'"), "stdout: {stdout}");
+}

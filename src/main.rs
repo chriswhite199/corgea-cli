@@ -299,6 +299,12 @@ enum Commands {
         #[arg(short, long, help = "Specify the scan id to list issues for.")]
         scan_id: Option<String>,
 
+        #[arg(
+            long,
+            help = "Only list scans for this exact branch name. Only applies when listing scans."
+        )]
+        branch: Option<String>,
+
         #[arg(short, long, value_parser = clap::value_parser!(u16))]
         page: Option<u16>,
 
@@ -1021,6 +1027,7 @@ fn main() {
             page,
             page_size,
             scan_id,
+            branch,
             sca_issues,
             code_quality,
             project_name,
@@ -1043,6 +1050,18 @@ fn main() {
                 println!("scan_id option is only supported for issues list command.");
                 std::process::exit(1);
             }
+            if let Some(branch) = branch {
+                if branch.trim().is_empty() {
+                    ::log::error!("branch cannot be empty.");
+                    std::process::exit(1);
+                }
+                if *issues || *sca_issues || *code_quality {
+                    ::log::error!(
+                        "--branch is only supported when listing scans, not with --issues, --sca-issues or --code-quality."
+                    );
+                    std::process::exit(1);
+                }
+            }
             list::run(
                 &corgea_config,
                 list::ListArgs {
@@ -1053,6 +1072,7 @@ fn main() {
                     page: *page,
                     page_size: *page_size,
                     scan_id: scan_id.clone(),
+                    branch: branch.as_ref().map(|b| b.trim().to_string()),
                     selector: utils::api::ProjectSelector {
                         name: project_naming::resolve(project_name.clone(), *project_naming_mode),
                         repo: repo.clone(),

@@ -142,6 +142,7 @@ for blocking rules to be evaluated, and exit 1 if that runs out; override with
 
 ```bash
 corgea ls                                      # List scans
+corgea ls --branch main                        # Only scans of branch main (exact match)
 corgea ls --issues --scan-id SCAN_ID           # Issues for a scan
 corgea ls --sca-issues                         # SCA (dependency) issues
 corgea ls --code-quality                       # Code quality issues
@@ -155,6 +156,7 @@ corgea ls --issues --scan-id SCAN_ID --json    # JSON output
 | `--sca-issues` | `-c` | List SCA issues |
 | `--code-quality` | `-q` | List code quality issues (alias `--quality`) |
 | `--scan-id` | `-s` | Filter to a scan |
+| `--branch` | | Only list scans for this exact branch (scan listing only; not with `--issues`, `--sca-issues`, `--code-quality`) |
 | `--page` | `-p` | Page number |
 | `--page-size` | | Items per page |
 | `--json` | | JSON output |

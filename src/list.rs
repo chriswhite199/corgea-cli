@@ -14,6 +14,7 @@ pub struct ListArgs {
     pub page: Option<u16>,
     pub page_size: Option<u16>,
     pub scan_id: Option<String>,
+    pub branch: Option<String>,
     pub selector: ProjectSelector,
 }
 
@@ -26,6 +27,7 @@ pub fn run(config: &Config, args: ListArgs) {
         page,
         page_size,
         scan_id,
+        branch,
         selector,
     } = args;
     println!();
@@ -320,6 +322,7 @@ pub fn run(config: &Config, args: ListArgs) {
             Some(project_name),
             page,
             page_size,
+            branch.as_deref(),
         ) {
             Ok(scans) => {
                 let page = scans.page;
@@ -371,10 +374,17 @@ pub fn run(config: &Config, args: ListArgs) {
             return;
         }
         if scans.is_empty() {
-            println!(
-                "Project '{}' has no scans yet. Run 'corgea scan' to create one.",
-                project_name
-            );
+            if let Some(branch) = &branch {
+                println!(
+                    "No scans found for project '{}' on branch '{}'.",
+                    project_name, branch
+                );
+            } else {
+                println!(
+                    "Project '{}' has no scans yet. Run 'corgea scan' to create one.",
+                    project_name
+                );
+            }
             return;
         }
         let mut table = vec![vec![
