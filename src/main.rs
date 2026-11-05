@@ -326,9 +326,16 @@ enum Commands {
 
         #[arg(
             long,
-            help = "Resolve the project from this repo (org/repo slug or remote URL) instead of the git remote."
+            help = "Resolve the project from this repo (org/repo slug or remote URL) instead of the git remote. With --projects, filters the project listing by repo."
         )]
         repo: Option<String>,
+
+        #[arg(
+            long,
+            conflicts_with_all = ["issues", "sca_issues", "code_quality", "scan_id", "project_name", "project_naming_mode"],
+            help = "List Corgea projects instead of scans. Combine with --repo to filter by repository."
+        )]
+        projects: bool,
     },
     /// Inspect something, by default it will inspect a scan
     Inspect {
@@ -1026,6 +1033,7 @@ fn main() {
             project_name,
             project_naming_mode,
             repo,
+            projects,
         }) => {
             verify_token_and_exit_when_fail(&corgea_config);
             if [*issues, *sca_issues, *code_quality]
@@ -1047,6 +1055,7 @@ fn main() {
                 &corgea_config,
                 list::ListArgs {
                     issues: *issues,
+                    projects: *projects,
                     sca_issues: *sca_issues,
                     code_quality: *code_quality,
                     json: *json,
@@ -1162,6 +1171,24 @@ mod tests {
         assert_eq!(default_log_level(0), "info");
         assert_eq!(default_log_level(2), "info"); // only ==1 means debug
         assert_eq!(default_log_level(-1), "info");
+    }
+
+    #[test]
+    fn list_projects_flag_conflicts() {
+        for other in [
+            &["--issues"][..],
+            &["--sca-issues"],
+            &["--code-quality"],
+            &["--scan-id", "x"],
+            &["--project-name", "x"],
+        ] {
+            let mut args = vec!["corgea", "list", "--projects"];
+            args.extend_from_slice(other);
+            assert!(Cli::try_parse_from(args).is_err(), "{other:?}");
+        }
+        assert!(
+            Cli::try_parse_from(["corgea", "list", "--projects", "--repo", "org/repo"]).is_ok()
+        );
     }
 
     #[test]

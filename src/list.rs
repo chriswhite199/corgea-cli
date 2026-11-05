@@ -8,6 +8,7 @@ use std::path::Path;
 #[derive(Default)]
 pub struct ListArgs {
     pub issues: bool,
+    pub projects: bool,
     pub sca_issues: bool,
     pub code_quality: bool,
     pub json: bool,
@@ -20,6 +21,7 @@ pub struct ListArgs {
 pub fn run(config: &Config, args: ListArgs) {
     let ListArgs {
         issues,
+        projects,
         sca_issues,
         code_quality,
         json,
@@ -29,6 +31,10 @@ pub fn run(config: &Config, args: ListArgs) {
         selector,
     } = args;
     println!();
+    if projects {
+        list_projects(config, page, page_size, selector.repo.as_deref(), json);
+        return;
+    }
     if sca_issues {
         // Only an explicit --project-name/--repo scopes the SCA listing: the
         // endpoint takes `project`, but unflagged `--sca-issues` has always
@@ -387,18 +393,7 @@ pub fn run(config: &Config, args: ListArgs) {
         ]];
 
         for scan in &scans {
-            let formatted_repo = scan.repo.clone().unwrap_or("N/A".to_string());
-            let formatted_repo = if formatted_repo != "N/A" {
-                if let Some(repo_name) = formatted_repo.split('/').next_back() {
-                    let owner = formatted_repo.split('/').nth(3).unwrap_or("unknown");
-                    let repo_name = repo_name.strip_suffix(".git").unwrap_or(repo_name);
-                    format!("{}/{}", owner, repo_name)
-                } else {
-                    formatted_repo
-                }
-            } else {
-                formatted_repo
-            };
+            let formatted_repo = format_short_repo(scan.repo.as_deref());
             table.push(vec![
                 scan.id.clone(),
                 scan.project.clone(),
@@ -410,6 +405,91 @@ pub fn run(config: &Config, args: ListArgs) {
         }
 
         utils::terminal::print_table(table, page, total_pages);
+    }
+}
+
+fn list_projects(
+    config: &Config,
+    page: Option<u16>,
+    page_size: Option<u16>,
+    repo: Option<&str>,
+    json: bool,
+) {
+    // Normalize like project resolution: a URL reduces to its path, a bare
+    // org/repo is used as given.
+    let repo_path =
+        repo.map(|r| utils::generic::extract_repo_path(r).unwrap_or_else(|| r.trim().to_string()));
+    if repo_path.as_deref() == Some("") {
+        log::error!("--repo must name a repository.");
+        std::process::exit(1);
+    }
+    let page = page.unwrap_or(1);
+    let response = match utils::api::fetch_projects_page(
+        &config.get_url(),
+        repo_path.as_deref(),
+        page.into(),
+        page_size,
+    ) {
+        Ok(response) => response,
+        Err(e) => {
+            log::error!(
+                "Unable to fetch projects. Please check your connection and ensure that:\n\
+                - The server URL is reachable.\n\
+                - Your authentication token is valid.\n\n\
+                Check out our docs at https://docs.corgea.app/install_cli#login-with-the-cli {}",
+                e
+            );
+            std::process::exit(1);
+        }
+    };
+    let (shown_page, total_pages, total_projects, projects) = match response {
+        Some(r) => (
+            r.page.unwrap_or(page.into()),
+            r.total_pages,
+            r.total_projects,
+            r.projects,
+        ),
+        None => (page.into(), None, None, Vec::new()),
+    };
+    if json {
+        let output = json!({
+            "page": shown_page,
+            "total_pages": total_pages,
+            "total_projects": total_projects,
+            "results": projects
+        });
+        println!("{}", serde_json::to_string_pretty(&output).unwrap());
+        return;
+    }
+    if projects.is_empty() {
+        match &repo_path {
+            Some(r) => println!("No projects found matching repo '{}'.", r),
+            None => println!("No projects found."),
+        }
+        return;
+    }
+    let mut table = vec![vec!["Project".to_string(), "Repo".to_string()]];
+    for project in &projects {
+        table.push(vec![
+            project.name.clone(),
+            format_short_repo(project.repo_url.as_deref()),
+        ]);
+    }
+    utils::terminal::print_table(table, Some(shown_page), total_pages);
+}
+
+/// Shorten a repo URL to `owner/repo`; missing → "N/A".
+fn format_short_repo(repo: Option<&str>) -> String {
+    let Some(repo) = repo else {
+        return "N/A".to_string();
+    };
+    match repo.split('/').next_back() {
+        Some(repo_name) => {
+            let owner = repo.split('/').nth(3).unwrap_or("unknown");
+            let repo_name = repo_name.strip_suffix(".git").unwrap_or(repo_name);
+            format!("{}/{}", owner, repo_name)
+        }
+        None => repo.to_string(),
     }
 }
 
@@ -425,6 +505,15 @@ fn format_short_sha(git_sha: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn format_short_repo_cases() {
+        assert_eq!(format_short_repo(None), "N/A");
+        assert_eq!(
+            format_short_repo(Some("https://github.com/acme/api.git")),
+            "acme/api"
+        );
+    }
 
     #[test]
     fn format_short_sha_missing_or_blank_is_na() {

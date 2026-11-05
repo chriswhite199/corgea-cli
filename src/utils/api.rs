@@ -1632,11 +1632,19 @@ pub fn query_scan_settings(
     }
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 pub struct ProjectSummary {
+    #[serde(default)]
+    pub id: Option<u64>,
     pub name: String,
     #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
     pub repo_url: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub created_at: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -1645,7 +1653,11 @@ pub struct ProjectsResponse {
     /// the parse, not read as "no matches" and take the legacy-name fallback.
     pub projects: Vec<ProjectSummary>,
     #[serde(default)]
+    pub page: Option<u32>,
+    #[serde(default)]
     pub total_pages: Option<u32>,
+    #[serde(default)]
+    pub total_projects: Option<u32>,
 }
 
 const PROJECTS_PAGE_SIZE: u16 = 50;
@@ -1673,31 +1685,35 @@ fn repo_url_on_host(repo_url: &str, expected_host: &str) -> bool {
     utils::generic::extract_repo_host(repo_url).as_deref() == Some(expected_host)
 }
 
-/// One page of GET /api/v1/projects?repo_url=…
+/// One page of GET /api/v1/projects, optionally filtered by `repo_url`.
+///
+/// `page_size` defaults to `PROJECTS_PAGE_SIZE`.
 ///
 /// `Ok(None)` only for a 404 (a backend without the endpoint). A 5xx or a body
 /// that does not parse is an `Err`: both are hard failures, and treating them
 /// as a clean miss would silently fall back to the CWD-name path.
-fn fetch_projects_page(
+pub fn fetch_projects_page(
     url: &str,
-    repo_path: &str,
+    repo_path: Option<&str>,
     page: u32,
+    page_size: Option<u16>,
 ) -> Result<Option<ProjectsResponse>, Box<dyn std::error::Error>> {
     let request_url = format!("{}{}/projects", url, API_BASE);
     let client = http_client();
     debug(&format!(
-        "Resolving project via {} (repo_url={}, page={})",
+        "Fetching projects via {} (repo_url={:?}, page={})",
         request_url, repo_path, page
     ));
-    let (page, page_size) = (page.to_string(), PROJECTS_PAGE_SIZE.to_string());
-    let response = client
-        .get(&request_url)
-        .query(&[
-            ("repo_url", repo_path),
-            ("page", &page),
-            ("page_size", &page_size),
-        ])
-        .send()?;
+    let mut params: Vec<(&str, String)> = Vec::new();
+    if let Some(repo_path) = repo_path {
+        params.push(("repo_url", repo_path.to_string()));
+    }
+    params.push(("page", page.to_string()));
+    params.push((
+        "page_size",
+        page_size.unwrap_or(PROJECTS_PAGE_SIZE).to_string(),
+    ));
+    let response = client.get(&request_url).query(&params).send()?;
     check_for_warnings(response.headers(), response.status());
     let status = response.status();
     if status == reqwest::StatusCode::NOT_FOUND {
@@ -1748,7 +1764,7 @@ pub fn resolve_project_by_repo(
     let mut candidates: Vec<ProjectSummary> = Vec::new();
     let mut page = 1;
     loop {
-        let Some(parsed) = fetch_projects_page(url, repo_path, page)? else {
+        let Some(parsed) = fetch_projects_page(url, Some(repo_path), page, None)? else {
             // Only page 1 can be a backend without the endpoint; a 404 once the
             // walk is under way (a concurrent delete shrinking the filtered set)
             // would discard the matches already found and read as a clean miss.

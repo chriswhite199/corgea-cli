@@ -145,6 +145,8 @@ corgea ls                                      # List scans
 corgea ls --issues --scan-id SCAN_ID           # Issues for a scan
 corgea ls --sca-issues                         # SCA (dependency) issues
 corgea ls --code-quality                       # Code quality issues
+corgea ls --projects                           # Corgea projects
+corgea ls --projects --repo org/repo           # Projects for one repo (server-side filter)
 corgea ls --issues --page 2 --page-size 10     # Pagination
 corgea ls --issues --scan-id SCAN_ID --json    # JSON output
 ```
@@ -154,6 +156,8 @@ corgea ls --issues --scan-id SCAN_ID --json    # JSON output
 | `--issues` | `-i` | List code/SAST issues |
 | `--sca-issues` | `-c` | List SCA issues |
 | `--code-quality` | `-q` | List code quality issues (alias `--quality`) |
+| `--projects` | | List projects (name and short repo). Cannot be combined with `--issues`, `--sca-issues`, `--code-quality`, `--scan-id`, `--project-name` or `--project-naming-mode` |
+| `--repo` | | Resolve the project from this repo (`org/repo` or remote URL); with `--projects`, filters the listing by repo |
 | `--scan-id` | `-s` | Filter to a scan |
 | `--page` | `-p` | Page number |
 | `--page-size` | | Items per page |

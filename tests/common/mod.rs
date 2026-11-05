@@ -586,7 +586,7 @@ impl Routes {
             Some(r#"{"status":"ok"}"#.to_string())
         } else if path == "/api/version" {
             self.version.clone()
-        } else if path.starts_with("/api/v1/projects?repo_url=") {
+        } else if path.starts_with("/api/v1/projects?") {
             self.projects.clone()
         } else if path.starts_with("/api/v1/scans?") {
             self.scans.clone()
