@@ -1386,21 +1386,53 @@ pub fn get_skill(
     Ok(Some(skill_response))
 }
 
+/// Kind of scan to keep when listing scans, picked with `--scan-type`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum ScanTypeFilter {
+    /// Scans of the whole project.
+    Full,
+    /// Scans of part of the project, such as pull request scans.
+    Partial,
+}
+
+impl ScanTypeFilter {
+    /// The value the scan list endpoint takes for its `scan_type` parameter.
+    pub fn as_query_value(self) -> &'static str {
+        match self {
+            ScanTypeFilter::Full => "full",
+            ScanTypeFilter::Partial => "partial",
+        }
+    }
+}
+
+/// `None` for `scan_type` lists scans of every kind.
 pub fn query_scan_list(
     url: &str,
     project: Option<&str>,
     page: Option<u16>,
     page_size: Option<u16>,
+    scan_type: Option<ScanTypeFilter>,
 ) -> Result<ScansResponse, Box<dyn Error>> {
-    let page = page.unwrap_or(1);
+    request_scan_list(url, scan_list_params(project, page, page_size, scan_type))
+}
+
+fn scan_list_params(
+    project: Option<&str>,
+    page: Option<u16>,
+    page_size: Option<u16>,
+    scan_type: Option<ScanTypeFilter>,
+) -> Vec<(&'static str, String)> {
     let mut query_params = vec![
-        ("page", page.to_string()),
+        ("page", page.unwrap_or(1).to_string()),
         ("page_size", page_size.unwrap_or(30).to_string()),
     ];
     if let Some(project) = project {
         query_params.push(("project", project.to_string()));
     }
-    request_scan_list(url, query_params)
+    if let Some(scan_type) = scan_type {
+        query_params.push(("scan_type", scan_type.as_query_value().to_string()));
+    }
+    query_params
 }
 
 /// One page of the project's scans that could be diffed against, newest first.
@@ -2641,6 +2673,42 @@ pub struct SCAIssuesResponse {
 mod tests {
     use super::*;
     use reqwest::header::{HeaderMap, HeaderValue};
+
+    #[test]
+    fn scan_list_params_include_scan_type_only_when_given() {
+        let with = scan_list_params(Some("proj"), None, None, Some(ScanTypeFilter::Partial));
+        assert!(with.contains(&("scan_type", "partial".to_string())));
+        assert!(with.contains(&("project", "proj".to_string())));
+
+        let without = scan_list_params(Some("proj"), None, None, None);
+        assert!(!without.iter().any(|(k, _)| *k == "scan_type"));
+    }
+
+    #[test]
+    fn scan_list_params_default_page_and_page_size() {
+        assert_eq!(
+            scan_list_params(None, None, None, None),
+            vec![("page", "1".to_string()), ("page_size", "30".to_string())]
+        );
+    }
+
+    #[test]
+    fn scan_list_params_pass_explicit_page_and_page_size() {
+        assert_eq!(
+            scan_list_params(None, Some(3), Some(10), Some(ScanTypeFilter::Full)),
+            vec![
+                ("page", "3".to_string()),
+                ("page_size", "10".to_string()),
+                ("scan_type", "full".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn scan_type_filter_query_values() {
+        assert_eq!(ScanTypeFilter::Full.as_query_value(), "full");
+        assert_eq!(ScanTypeFilter::Partial.as_query_value(), "partial");
+    }
 
     #[test]
     fn issue_json_omits_scanner_metadata_that_list_and_scan_reports_reemit() {

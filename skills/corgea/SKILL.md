@@ -145,6 +145,7 @@ corgea ls                                      # List scans
 corgea ls --issues --scan-id SCAN_ID           # Issues for a scan
 corgea ls --sca-issues                         # SCA (dependency) issues
 corgea ls --code-quality                       # Code quality issues
+corgea ls --scan-type partial                  # Only partial scans (or: full)
 corgea ls --issues --page 2 --page-size 10     # Pagination
 corgea ls --issues --scan-id SCAN_ID --json    # JSON output
 ```
@@ -155,6 +156,7 @@ corgea ls --issues --scan-id SCAN_ID --json    # JSON output
 | `--sca-issues` | `-c` | List SCA issues |
 | `--code-quality` | `-q` | List code quality issues (alias `--quality`) |
 | `--scan-id` | `-s` | Filter to a scan |
+| `--scan-type` | | Only list scans of this type: `full` or `partial` (scan listing only; not with `--issues`, `--sca-issues`, `--code-quality` or `--scan-id`) |
 | `--page` | `-p` | Page number |
 | `--page-size` | | Items per page |
 | `--json` | | JSON output |

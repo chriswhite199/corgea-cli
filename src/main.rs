@@ -299,6 +299,15 @@ enum Commands {
         #[arg(short, long, help = "Specify the scan id to list issues for.")]
         scan_id: Option<String>,
 
+        #[arg(
+            long,
+            value_enum,
+            value_name = "TYPE",
+            conflicts_with_all = ["issues", "sca_issues", "code_quality", "scan_id"],
+            help = "Only list scans of this type: full or partial. Only valid when listing scans, not with --issues, --sca-issues, --code-quality or --scan-id."
+        )]
+        scan_type: Option<utils::api::ScanTypeFilter>,
+
         #[arg(short, long, value_parser = clap::value_parser!(u16))]
         page: Option<u16>,
 
@@ -1021,6 +1030,7 @@ fn main() {
             page,
             page_size,
             scan_id,
+            scan_type,
             sca_issues,
             code_quality,
             project_name,
@@ -1053,6 +1063,7 @@ fn main() {
                     page: *page,
                     page_size: *page_size,
                     scan_id: scan_id.clone(),
+                    scan_type: *scan_type,
                     selector: utils::api::ProjectSelector {
                         name: project_naming::resolve(project_name.clone(), *project_naming_mode),
                         repo: repo.clone(),
@@ -1162,6 +1173,49 @@ mod tests {
         assert_eq!(default_log_level(0), "info");
         assert_eq!(default_log_level(2), "info"); // only ==1 means debug
         assert_eq!(default_log_level(-1), "info");
+    }
+
+    #[test]
+    fn list_scan_type_parses_full_and_partial() {
+        for (arg, expected) in [
+            ("full", utils::api::ScanTypeFilter::Full),
+            ("partial", utils::api::ScanTypeFilter::Partial),
+        ] {
+            let cli = Cli::try_parse_from(["corgea", "list", "--scan-type", arg]).unwrap();
+            match cli.command {
+                Some(Commands::List { scan_type, .. }) => assert_eq!(scan_type, Some(expected)),
+                other => panic!("expected list command, got {:?}", other),
+            }
+        }
+    }
+
+    #[test]
+    fn list_scan_type_conflicts_with_issue_flags() {
+        for args in [
+            vec!["--issues"],
+            vec!["--sca-issues"],
+            vec!["--code-quality"],
+            vec!["--scan-id", "ABC"],
+        ] {
+            let flag = args[0];
+            let err = Cli::try_parse_from(
+                ["corgea", "list", "--scan-type", "partial"]
+                    .into_iter()
+                    .chain(args),
+            )
+            .unwrap_err();
+            assert_eq!(
+                err.kind(),
+                clap::error::ErrorKind::ArgumentConflict,
+                "{flag}"
+            );
+        }
+    }
+
+    #[test]
+    fn list_scan_type_rejects_unknown_value() {
+        let err = Cli::try_parse_from(["corgea", "list", "--scan-type", "bogus"]).unwrap_err();
+        assert_eq!(err.kind(), clap::error::ErrorKind::InvalidValue);
     }
 
     #[test]

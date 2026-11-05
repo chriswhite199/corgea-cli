@@ -1,7 +1,7 @@
 use crate::config::Config;
 use crate::log::debug;
 use crate::utils;
-use crate::utils::api::ProjectSelector;
+use crate::utils::api::{ProjectSelector, ScanTypeFilter};
 use serde_json::json;
 use std::path::Path;
 
@@ -14,6 +14,7 @@ pub struct ListArgs {
     pub page: Option<u16>,
     pub page_size: Option<u16>,
     pub scan_id: Option<String>,
+    pub scan_type: Option<ScanTypeFilter>,
     pub selector: ProjectSelector,
 }
 
@@ -26,6 +27,7 @@ pub fn run(config: &Config, args: ListArgs) {
         page,
         page_size,
         scan_id,
+        scan_type,
         selector,
     } = args;
     println!();
@@ -320,6 +322,7 @@ pub fn run(config: &Config, args: ListArgs) {
             Some(project_name),
             page,
             page_size,
+            scan_type,
         ) {
             Ok(scans) => {
                 let page = scans.page;
