@@ -277,6 +277,11 @@ enum Commands {
     },
     /// List something, by default it lists the scans
     #[command(alias = "ls")]
+    #[command(group(
+        clap::ArgGroup::new("reachability_target")
+            .args(["issues", "sca_issues"])
+            .multiple(true)
+    ))]
     List {
         #[arg(short, long, help = "List issues instead of scans")]
         issues: bool,
@@ -307,6 +312,13 @@ enum Commands {
 
         #[arg(long, value_parser = clap::value_parser!(u16), help = "Number of items per page")]
         page_size: Option<u16>,
+
+        #[arg(
+            long,
+            requires = "reachability_target",
+            help = "Include the reachability summary for each issue. Requires --issues or --sca-issues."
+        )]
+        include_reachability: bool,
 
         #[arg(
             long,
@@ -359,6 +371,13 @@ enum Commands {
             help = "Display the diff of the fix only in the output (only if --issue is true)."
         )]
         diff: bool,
+
+        #[arg(
+            long,
+            requires = "issue",
+            help = "Include the issue's reachability (reachable flag and endpoints). Requires --issue."
+        )]
+        include_reachability: bool,
 
         id: String,
     },
@@ -1023,11 +1042,14 @@ fn main() {
             scan_id,
             sca_issues,
             code_quality,
+            include_reachability,
             project_name,
             project_naming_mode,
             repo,
         }) => {
-            verify_token_and_exit_when_fail(&corgea_config);
+            // --include-reachability requiring --issues or --sca-issues is enforced
+            // by clap (`reachability_target` group); combined with the exclusivity
+            // check below, it can never reach list::run alongside --code-quality.
             if [*issues, *sca_issues, *code_quality]
                 .iter()
                 .filter(|flag| **flag)
@@ -1043,6 +1065,7 @@ fn main() {
                 println!("scan_id option is only supported for issues list command.");
                 std::process::exit(1);
             }
+            verify_token_and_exit_when_fail(&corgea_config);
             list::run(
                 &corgea_config,
                 list::ListArgs {
@@ -1053,6 +1076,7 @@ fn main() {
                     page: *page,
                     page_size: *page_size,
                     scan_id: scan_id.clone(),
+                    include_reachability: *include_reachability,
                     selector: utils::api::ProjectSelector {
                         name: project_naming::resolve(project_name.clone(), *project_naming_mode),
                         repo: repo.clone(),
@@ -1067,9 +1091,19 @@ fn main() {
             summary,
             fix,
             diff,
+            include_reachability,
         }) => {
             verify_token_and_exit_when_fail(&corgea_config);
-            inspect::run(&corgea_config, issue, json, summary, fix, diff, id)
+            inspect::run(
+                &corgea_config,
+                issue,
+                json,
+                summary,
+                fix,
+                diff,
+                include_reachability,
+                id,
+            )
         }
         Some(Commands::SetupHooks { default_config }) => {
             setup_hooks::setup_pre_commit_hook(*default_config);
@@ -1155,6 +1189,27 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn include_reachability_requires_issues_or_sca_issues() {
+        let parse = |args: &[&str]| Cli::try_parse_from([&["corgea"], args].concat());
+
+        assert!(parse(&["ls", "--include-reachability"]).is_err());
+        assert!(parse(&["ls", "--code-quality", "--include-reachability"]).is_err());
+        assert!(parse(&["ls", "--issues", "--include-reachability"]).is_ok());
+        assert!(parse(&["ls", "--sca-issues", "--include-reachability"]).is_ok());
+        // Left to the runtime exclusivity check so the user sees the real conflict.
+        assert!(parse(&["ls", "--issues", "--code-quality", "--include-reachability"]).is_ok());
+    }
+
+    #[test]
+    fn inspect_include_reachability_requires_issue() {
+        let parse = |args: &[&str]| Cli::try_parse_from([&["corgea"], args].concat());
+
+        assert!(parse(&["inspect", "--include-reachability", "ID"]).is_err());
+        assert!(parse(&["inspect", "--issue", "--include-reachability", "ID"]).is_ok());
+        assert!(parse(&["inspect", "-i", "--json", "--include-reachability", "ID"]).is_ok());
+    }
 
     #[test]
     fn default_log_level_maps_debug_flag() {

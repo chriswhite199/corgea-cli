@@ -1854,6 +1854,7 @@ mod tests {
             location: SCALocation {
                 path: "package-lock.json".to_string(),
             },
+            reachability: None,
         }
     }
 

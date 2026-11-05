@@ -932,6 +932,7 @@ pub fn get_all_issues(
             Some(current_page as u16),
             Some(30),
             scan_id.clone(),
+            false,
         ) {
             Ok(response) => response,
             Err(e) => return Err(format!("Failed to get scan issues: {}", e).into()),
@@ -956,12 +957,21 @@ pub fn get_all_issues(
     Ok(all_issues)
 }
 
+/// Adds `include_reachability=true` only when asked for; the server's default
+/// (no reachability data) is left alone otherwise.
+fn push_reachability_param(query_params: &mut Vec<(&'static str, String)>, include: bool) {
+    if include {
+        query_params.push(("include_reachability", "true".to_string()));
+    }
+}
+
 pub fn get_scan_issues(
     url: &str,
     project: &str,
     page: Option<u16>,
     page_size: Option<u16>,
     scan_id: Option<String>,
+    include_reachability: bool,
 ) -> Result<ProjectIssuesResponse, Box<dyn std::error::Error>> {
     // Project names can contain `&`/`?`/`#`, so use `query`, not `format!`.
     let (url, mut query_params) = match scan_id {
@@ -978,6 +988,7 @@ pub fn get_scan_issues(
         query_params.push(("page", p.to_string()));
     }
     query_params.push(("page_size", page_size.unwrap_or(30).to_string()));
+    push_reachability_param(&mut query_params, include_reachability);
     let client = http_client();
 
     debug(&format!("Sending request to URL: {}", url));
@@ -1276,11 +1287,18 @@ pub fn get_scan_report(
     }
 }
 
-pub fn get_issue(url: &str, issue: &str) -> Result<FullIssueResponse, Box<dyn std::error::Error>> {
-    let url = format!("{}{}/issue/{}?include_metadata=true", url, API_BASE, issue);
+pub fn get_issue(
+    url: &str,
+    issue: &str,
+    include_reachability: bool,
+) -> Result<FullIssueResponse, Box<dyn std::error::Error>> {
+    let url = format!("{}{}/issue/{}", url, API_BASE, issue);
+    let mut query_params = vec![("include_metadata", "true".to_string())];
+    push_reachability_param(&mut query_params, include_reachability);
     let client = http_client();
     debug(&format!("Sending request to URL: {}", url));
-    let response = match client.get(&url).send() {
+    debug(&format!("Query params: {:?}", query_params));
+    let response = match client.get(&url).query(&query_params).send() {
         Ok(res) => {
             check_for_warnings(res.headers(), res.status());
             res
@@ -2110,6 +2128,7 @@ pub fn get_sca_issues(
     page_size: Option<u16>,
     scan_id: Option<String>,
     project: Option<&str>,
+    include_reachability: bool,
 ) -> Result<SCAIssuesResponse, Box<dyn std::error::Error>> {
     let client = http_client();
     let mut query_params = vec![];
@@ -2124,6 +2143,7 @@ pub fn get_sca_issues(
     if let Some(project) = project {
         query_params.push(("project", project.to_string()));
     }
+    push_reachability_param(&mut query_params, include_reachability);
 
     let endpoint = if let Some(scan_id) = scan_id {
         format!("{}{}/scan/{}/issues/sca", url, API_BASE, scan_id)
@@ -2195,6 +2215,7 @@ pub fn get_all_sca_issues(
             Some(30),
             scan_id.clone(),
             None,
+            false,
         ) {
             Ok(response) => response,
             Err(e) => return Err(format!("Failed to get SCA issues: {}", e).into()),
@@ -2378,6 +2399,14 @@ pub struct Issue {
     /// is fetched with `include_metadata=true`.
     #[serde(default, skip_serializing)]
     pub metadata: Option<serde_json::Map<String, Value>>,
+    /// Reachability data, passed through as the server sent it. Its shape
+    /// depends on the endpoint: the issue list (`include_reachability=true`)
+    /// sends `{is_reachable, endpoint_count}`, the issue detail sends
+    /// `{is_reachable, endpoints: [...]}`. A typed struct would drop or
+    /// invent fields when `inspect --json` re-serializes it. Left out of
+    /// output when absent so existing `--json` output is unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reachability: Option<Value>,
 }
 
 impl Issue {
@@ -2417,6 +2446,8 @@ pub struct IssueWithBlockingRules {
     pub auto_fix_suggestion: Option<AutoFixSuggestion>,
     pub blocked: bool,
     pub blocking_rules: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reachability: Option<Value>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -2613,6 +2644,11 @@ pub struct SCAIssue {
     pub cve: Option<String>,
     pub package: SCAPackage,
     pub location: SCALocation,
+    /// Reachability summary, sent only when listed with
+    /// `include_reachability=true`. Passed through as the server sent it, so
+    /// an unexpected shape can't fail the whole listing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reachability: Option<Value>,
 }
 
 #[derive(Deserialize, Serialize, Debug)]
@@ -2641,6 +2677,73 @@ pub struct SCAIssuesResponse {
 mod tests {
     use super::*;
     use reqwest::header::{HeaderMap, HeaderValue};
+
+    #[test]
+    fn reachability_param_is_sent_only_when_requested() {
+        let mut params = vec![];
+        push_reachability_param(&mut params, false);
+        assert!(params.is_empty());
+        push_reachability_param(&mut params, true);
+        assert_eq!(params, vec![("include_reachability", "true".to_string())]);
+    }
+
+    #[test]
+    fn sca_reachability_of_unexpected_type_still_parses() {
+        let raw = r#"{"id":"1","created_at":"x","description":null,"details":null,
+            "severity":null,"classification":null,"cve":null,
+            "package":{"name":"p","version":"1","ecosystem":"npm","fix_version":null},
+            "location":{"path":"a"},"reachability":{"status":7}}"#;
+        let issue: SCAIssue = serde_json::from_str(raw).unwrap();
+        assert_eq!(issue.reachability, Some(serde_json::json!({"status": 7})));
+    }
+
+    #[test]
+    fn issue_detail_reachability_round_trips_unchanged() {
+        // `inspect --json` re-serializes the detail response's `Issue`; the
+        // detail shape (endpoints, pathways) must survive, and no
+        // `endpoint_count` may be invented.
+        let reachability = serde_json::json!({
+            "is_reachable": true,
+            "endpoints": [{
+                "path": "/login",
+                "method": "POST",
+                "file_path": "app/views.py",
+                "line_number": 42,
+                "pathways": [{"steps": ["a", "b"]}]
+            }]
+        });
+        let issue: Issue = serde_json::from_value(serde_json::json!({
+            "id": "1", "scan_id": null, "status": "open", "urgency": "high",
+            "created_at": "x",
+            "classification": {"id": "CWE-89", "name": "SQLi", "description": null},
+            "location": {"file": {"name": "views.py", "language": "python",
+                "path": "app/views.py"}, "project": {"name": "p", "branch": null,
+                "git_sha": null}, "line_number": 42},
+            "details": null,
+            "auto_triage": {"false_positive_detection": {"status": "valid", "reasoning": null}},
+            "auto_fix_suggestion": null,
+            "reachability": reachability.clone()
+        }))
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(&issue).unwrap()["reachability"],
+            reachability
+        );
+    }
+
+    #[test]
+    fn sca_issue_json_omits_absent_reachability() {
+        let raw = r#"{"id":"1","created_at":"x","description":null,"details":null,
+            "severity":null,"classification":null,"cve":null,
+            "package":{"name":"p","version":"1","ecosystem":"npm","fix_version":null},
+            "location":{"path":"a"}}"#;
+        let issue: SCAIssue = serde_json::from_str(raw).unwrap();
+        assert!(issue.reachability.is_none());
+        assert!(serde_json::to_value(&issue)
+            .unwrap()
+            .get("reachability")
+            .is_none());
+    }
 
     #[test]
     fn issue_json_omits_scanner_metadata_that_list_and_scan_reports_reemit() {

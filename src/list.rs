@@ -2,7 +2,7 @@ use crate::config::Config;
 use crate::log::debug;
 use crate::utils;
 use crate::utils::api::ProjectSelector;
-use serde_json::json;
+use serde_json::{json, Value};
 use std::path::Path;
 
 #[derive(Default)]
@@ -14,6 +14,7 @@ pub struct ListArgs {
     pub page: Option<u16>,
     pub page_size: Option<u16>,
     pub scan_id: Option<String>,
+    pub include_reachability: bool,
     pub selector: ProjectSelector,
 }
 
@@ -26,6 +27,7 @@ pub fn run(config: &Config, args: ListArgs) {
         page,
         page_size,
         scan_id,
+        include_reachability,
         selector,
     } = args;
     println!();
@@ -47,6 +49,7 @@ pub fn run(config: &Config, args: ListArgs) {
             page_size,
             scan_id.clone(),
             resolved.as_ref().map(|r| r.query_name.as_str()),
+            include_reachability,
         ) {
             Ok(response) => response,
             Err(e) => {
@@ -92,6 +95,9 @@ pub fn run(config: &Config, args: ListArgs) {
             "Ecosystem".to_string(),
             "File Path".to_string(),
         ]];
+        if include_reachability {
+            table[0].push("Reachability".to_string());
+        }
 
         for issue in &sca_issues_response.issues {
             let path = Path::new(&issue.location.path);
@@ -111,7 +117,7 @@ pub fn run(config: &Config, args: ListArgs) {
                 issue.location.path.clone()
             };
 
-            table.push(vec![
+            let mut row = vec![
                 issue.id.clone(),
                 issue.package.name.clone(),
                 issue.package.version.clone(),
@@ -125,7 +131,11 @@ pub fn run(config: &Config, args: ListArgs) {
                 issue.cve.clone().unwrap_or("N/A".to_string()),
                 issue.package.ecosystem.clone(),
                 shortened_path,
-            ]);
+            ];
+            if include_reachability {
+                row.push(format_sca_reachability(issue.reachability.as_ref()));
+            }
+            table.push(row);
         }
 
         utils::terminal::print_table(
@@ -163,6 +173,7 @@ pub fn run(config: &Config, args: ListArgs) {
                 Some(page.unwrap_or(1)),
                 page_size,
                 scan_id.clone(),
+                include_reachability,
             )
         };
         let issues_response = match fetch_result {
@@ -247,6 +258,7 @@ pub fn run(config: &Config, args: ListArgs) {
                             details: issue.details.clone(),
                             auto_triage: issue.auto_triage.clone(),
                             auto_fix_suggestion: issue.auto_fix_suggestion.clone(),
+                            reachability: issue.reachability.clone(),
                             blocked: blocking_rules.contains_key(&issue.id),
                             blocking_rules: if blocking_rules.contains_key(&issue.id) {
                                 Some(vec![blocking_rules.get(&issue.id).unwrap().clone()])
@@ -271,6 +283,12 @@ pub fn run(config: &Config, args: ListArgs) {
         if render_blocking_rules {
             table_header.push("Blocking".to_string());
             table_header.push("Rule ID".to_string());
+        }
+        // Code-quality issues carry no reachability data; never show the columns.
+        let show_reachability = include_reachability && !code_quality;
+        if show_reachability {
+            table_header.push("Reachable".to_string());
+            table_header.push("Endpoints".to_string());
         }
         let mut table = vec![table_header];
 
@@ -307,6 +325,11 @@ pub fn run(config: &Config, args: ListArgs) {
                         .unwrap_or(&"".to_string())
                         .to_string(),
                 );
+            }
+            if show_reachability {
+                let (reachable, endpoints) = format_issue_reachability(issue.reachability.as_ref());
+                row.push(reachable);
+                row.push(endpoints);
             }
             table.push(row);
         }
@@ -422,9 +445,128 @@ fn format_short_sha(git_sha: Option<&str>) -> String {
         .unwrap_or_else(|| "N/A".to_string())
 }
 
+/// One-cell rendering of an SCA issue's reachability for the list table: just
+/// the `status` string, or `N/A` when missing or not a string. Any status
+/// value is shown as-is, including ones the server adds later (today:
+/// `not_direct_dependency`, `pending`, `vulnerable_usage_reachable`,
+/// `vulnerable_usage_unreachable`, `dead_dependency`).
+fn format_sca_reachability(reachability: Option<&Value>) -> String {
+    reachability
+        .and_then(|r| r.get("status"))
+        .and_then(Value::as_str)
+        .map_or_else(|| "N/A".to_string(), str::to_string)
+}
+
+/// Cells for the code issue table's two reachability columns, in order:
+/// `is_reachable` and the endpoint count. The count comes from
+/// `endpoint_count` (issue list) or the length of `endpoints` (issue detail).
+/// Either cell shows as `N/A` when missing or of an unexpected type.
+fn format_issue_reachability(reachability: Option<&Value>) -> (String, String) {
+    let na = || "N/A".to_string();
+    let is_reachable = reachability
+        .and_then(|r| r.get("is_reachable"))
+        .and_then(Value::as_bool);
+    let endpoint_count = reachability.and_then(|r| {
+        r.get("endpoint_count").and_then(as_count).or_else(|| {
+            r.get("endpoints")
+                .and_then(Value::as_array)
+                .map(|a| a.len() as u64)
+        })
+    });
+    (
+        is_reachable.map_or_else(na, |b| b.to_string()),
+        endpoint_count.map_or_else(na, |n| n.to_string()),
+    )
+}
+
+/// A non-negative whole number, whether serialized as an integer (`3`) or a
+/// float (`3.0`).
+fn as_count(value: &Value) -> Option<u64> {
+    value.as_u64().or_else(|| {
+        value
+            .as_f64()
+            .filter(|f| *f >= 0.0 && f.fract() == 0.0 && *f <= u64::MAX as f64)
+            .map(|f| f as u64)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn format_sca_reachability_shows_only_the_status() {
+        let sca = |status: Value| json!({"status": status, "description": "why"});
+        assert_eq!(format_sca_reachability(None), "N/A");
+        assert_eq!(format_sca_reachability(Some(&json!({}))), "N/A");
+        assert_eq!(format_sca_reachability(Some(&sca(Value::Null))), "N/A");
+        assert_eq!(format_sca_reachability(Some(&sca(json!(7)))), "N/A");
+        assert_eq!(
+            format_sca_reachability(Some(&sca("vulnerable_usage_reachable".into()))),
+            "vulnerable_usage_reachable"
+        );
+    }
+
+    #[test]
+    fn format_sca_reachability_accepts_values_outside_the_documented_set() {
+        let r = json!({"status": "some_future_status"});
+        assert_eq!(format_sca_reachability(Some(&r)), "some_future_status");
+    }
+
+    #[test]
+    fn format_issue_reachability_splits_is_reachable_and_endpoint_count() {
+        let na = || ("N/A".to_string(), "N/A".to_string());
+        assert_eq!(format_issue_reachability(None), na());
+        assert_eq!(format_issue_reachability(Some(&json!({}))), na());
+        assert_eq!(
+            format_issue_reachability(Some(&json!({"is_reachable": true, "endpoint_count": 3}))),
+            ("true".to_string(), "3".to_string())
+        );
+        assert_eq!(
+            format_issue_reachability(Some(&json!({"is_reachable": false, "endpoint_count": 0}))),
+            ("false".to_string(), "0".to_string())
+        );
+    }
+
+    #[test]
+    fn format_issue_reachability_accepts_integral_float_count() {
+        assert_eq!(
+            format_issue_reachability(Some(&json!({"is_reachable": true, "endpoint_count": 3.0}))),
+            ("true".to_string(), "3".to_string())
+        );
+    }
+
+    #[test]
+    fn format_issue_reachability_tolerates_unexpected_types() {
+        let na = || ("N/A".to_string(), "N/A".to_string());
+        assert_eq!(
+            format_issue_reachability(Some(
+                &json!({"is_reachable": "unknown", "endpoint_count": -1})
+            )),
+            na()
+        );
+        assert_eq!(
+            format_issue_reachability(Some(&json!({"endpoint_count": 2.5}))).1,
+            "N/A"
+        );
+        assert_eq!(
+            format_issue_reachability(Some(&json!({"endpoint_count": -1.0}))).1,
+            "N/A"
+        );
+    }
+
+    #[test]
+    fn format_issue_reachability_counts_detail_endpoints() {
+        let r = json!({
+            "is_reachable": true,
+            "endpoints": [{"path": "/a", "method": "GET"}, {"path": "/b", "method": "POST"}]
+        });
+        assert_eq!(
+            format_issue_reachability(Some(&r)),
+            ("true".to_string(), "2".to_string())
+        );
+    }
 
     #[test]
     fn format_short_sha_missing_or_blank_is_na() {

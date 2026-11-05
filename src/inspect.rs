@@ -1,7 +1,9 @@
 use crate::config::Config;
 use crate::scanners;
 use crate::utils;
+use serde_json::Value;
 use std::time::SystemTime;
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     config: &Config,
     issues: &bool,
@@ -9,6 +11,7 @@ pub fn run(
     summary: &bool,
     fix_explanation: &bool,
     fix_diff: &bool,
+    include_reachability: &bool,
     id: &String,
 ) {
     fn print_section(title: &str, value: impl ToString) {
@@ -18,7 +21,11 @@ pub fn run(
     println!();
     if *issues {
         let show_everything = !*summary && !*fix_explanation && !*fix_diff;
-        let issue_details = match utils::api::get_issue(&config.get_url(), id) {
+        let issue_details = match utils::api::get_issue(
+            &config.get_url(),
+            id,
+            *include_reachability,
+        ) {
             Ok(issue) => issue,
             Err(e) => {
                 log::error!(
@@ -75,6 +82,12 @@ pub fn run(
                 println!("Scanner Metadata:");
                 for (key, value) in &scanner_metadata {
                     println!("  {:<13}: {}", key, value);
+                }
+                println!("-------------------------");
+            }
+            if *include_reachability {
+                for line in format_reachability_lines(issue_details.issue.reachability.as_ref()) {
+                    println!("{}", line);
                 }
                 println!("-------------------------");
             }
@@ -154,5 +167,92 @@ pub fn run(
             }
             print_section("Total Issues", total_issues);
         };
+    }
+}
+
+/// Text rendering of an issue detail's reachability: whether it is reachable,
+/// then one line per endpoint (`METHOD path (file:line)`). Fields that are
+/// missing or of an unexpected type are shown as `N/A` or left out.
+fn format_reachability_lines(reachability: Option<&Value>) -> Vec<String> {
+    let is_reachable = reachability
+        .and_then(|r| r.get("is_reachable"))
+        .and_then(Value::as_bool)
+        .map_or_else(|| "N/A".to_string(), |b| b.to_string());
+    let mut lines = vec![format!("{:<15}: {}", "Reachable", is_reachable)];
+    let endpoints = reachability
+        .and_then(|r| r.get("endpoints"))
+        .and_then(Value::as_array);
+    match endpoints {
+        Some(endpoints) if !endpoints.is_empty() => {
+            lines.push(format!("Endpoints ({}):", endpoints.len()));
+            for endpoint in endpoints {
+                let field = |key: &str| endpoint.get(key).and_then(Value::as_str);
+                let mut line = format!(
+                    "  {} {}",
+                    field("method").unwrap_or("N/A"),
+                    field("path").unwrap_or("N/A")
+                );
+                if let Some(file) = field("file_path") {
+                    match endpoint.get("line_number").and_then(Value::as_u64) {
+                        Some(n) => line.push_str(&format!(" ({}:{})", file, n)),
+                        None => line.push_str(&format!(" ({})", file)),
+                    }
+                }
+                lines.push(line);
+            }
+        }
+        Some(_) => lines.push(format!("{:<15}: {}", "Endpoints", 0)),
+        None => lines.push(format!("{:<15}: {}", "Endpoints", "N/A")),
+    }
+    lines
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn reachability_lines_when_absent() {
+        assert_eq!(
+            format_reachability_lines(None),
+            vec![
+                "Reachable      : N/A".to_string(),
+                "Endpoints      : N/A".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn reachability_lines_list_each_endpoint() {
+        let r = json!({
+            "is_reachable": true,
+            "endpoints": [
+                {"path": "/login", "method": "POST", "file_path": "app/views.py",
+                 "line_number": 42, "pathways": []},
+                {"path": "/health", "method": "GET"}
+            ]
+        });
+        assert_eq!(
+            format_reachability_lines(Some(&r)),
+            vec![
+                "Reachable      : true".to_string(),
+                "Endpoints (2):".to_string(),
+                "  POST /login (app/views.py:42)".to_string(),
+                "  GET /health".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn reachability_lines_with_no_endpoints() {
+        let r = json!({"is_reachable": false, "endpoints": []});
+        assert_eq!(
+            format_reachability_lines(Some(&r)),
+            vec![
+                "Reachable      : false".to_string(),
+                "Endpoints      : 0".to_string()
+            ]
+        );
     }
 }

@@ -147,6 +147,7 @@ corgea ls --sca-issues                         # SCA (dependency) issues
 corgea ls --code-quality                       # Code quality issues
 corgea ls --issues --page 2 --page-size 10     # Pagination
 corgea ls --issues --scan-id SCAN_ID --json    # JSON output
+corgea ls --sca-issues --include-reachability  # Add reachability summary (also works with --issues)
 ```
 
 | Flag | Short | Description |
@@ -158,6 +159,7 @@ corgea ls --issues --scan-id SCAN_ID --json    # JSON output
 | `--page` | `-p` | Page number |
 | `--page-size` | | Items per page |
 | `--json` | | JSON output |
+| `--include-reachability` | | Include each issue's reachability summary (`--issues` or `--sca-issues` only; adds `Reachable` and `Endpoints` table columns for `--issues`, a `Reachability` status column for `--sca-issues`, and a `reachability` JSON field) |
 
 ### Inspect — `corgea inspect <id>`
 
@@ -168,6 +170,7 @@ corgea inspect --issue --summary ISSUE_ID      # Summary only
 corgea inspect --issue --fix ISSUE_ID          # Fix explanation only
 corgea inspect --issue --diff ISSUE_ID         # Diff only
 corgea inspect --issue --json ISSUE_ID         # JSON output
+corgea inspect --issue --include-reachability ISSUE_ID  # Add reachability + endpoints
 ```
 
 Issue summaries include a "Scanner Metadata" section when the originating scanner reported identifiers (for Fortify: `instance_id`, `class_id`, `kingdom`, `category`, `analyzer`, `build_id`). With `--json` they appear under `issue.metadata` (the issue's scanner identifiers) and `issue.scanner_metadata` (the fix analysis copy).
@@ -179,6 +182,7 @@ Issue summaries include a "Scanner Metadata" section when the originating scanne
 | `--fix` | `-f` | Fix explanation only |
 | `--diff` | `-d` | Diff only |
 | `--json` | | JSON output |
+| `--include-reachability` | | Include the issue's reachability (`--issue` only; adds `Reachable` and an `Endpoints` list to the summary, and an `issue.reachability` JSON field with `is_reachable` and `endpoints`) |
 
 ### Setup Hooks — `corgea setup-hooks`
 
